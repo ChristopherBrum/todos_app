@@ -41,18 +41,12 @@ helpers do
     incomplete_lists.each { |list| yield list }
   end
 
-
   ## Throws error if attempting to add a new item without an input
   def sort_todos(todos, &block)
     incomplete_todos, complete_todos = todos.partition { |todo| todo[:completed] }
 
     complete_todos.each(&block)
     incomplete_todos.each(&block)
-  end
-
-  def next_todo_id(todos)
-    max = todos.map { |todo| todo[:id] }.max || 0
-    max + 1
   end
 end
 
@@ -80,10 +74,42 @@ class SessionPersistence
     @session[:lists].delete_if { |list| list[:list_id] == id }
   end
 
+  def update_list_name(id, new_name)
+    list = find_list(id)
+    list[:name] = new_name
+  end
+
+  def create_new_todo(list_id, todo_name)
+    list = find_list(list_id)
+    id = next_todo_id(list[:todos])
+    list[:todos] << {id: id, name: todo_name, completed: false}
+  end
+
+  def delete_todo_from_list(list_id, todo_id)
+    list = find_list(list_id)
+    list[:todos].reject! { |todo| todo[:id] == todo_id }
+  end
+
+  def update_todo_status(list_id, todo_id, new_status)
+    list = find_list(list_id)
+    todo = list[:todos].find { |t| t[:id] == todo_id }
+    todo[:completed] = new_status
+  end
+
+  def mark_all_todos_as_completed(list_id)
+    list = find_list(list_id)
+    list[:todos].each { |todo| todo[:completed] = true }
+  end
+
   private
 
   def next_list_id(lists)
     max = lists.map { |list| list[:list_id] }.max || 0
+    max + 1
+  end
+
+  def next_todo_id(todos)
+    max = todos.map { |todo| todo[:id] }.max || 0
     max + 1
   end
 end
@@ -142,7 +168,6 @@ post '/lists' do
     erb :new_list, layout: :layout
   else
     @storage.create_new_list(list_name)
-
     session[:success] = 'The list has been created.'
     redirect '/lists'
   end
@@ -177,7 +202,7 @@ post "/lists/:id" do
     session[:error] = error
     erb :edit_list, layout: :layout
   else
-    @list[:name] = list_name
+    @storage.update_list_name(id, list_name)
     session[:success] = 'The name has been updated.'
     redirect "/lists/#{id}"
   end
@@ -186,7 +211,6 @@ end
 # delete a list
 post "/lists/:id/destroy" do
   id = params[:id].to_i
-  
   @storage.delete_list(id)
 
   if env["HTTP_X_REQUESTED_WITH"] == "XMLHttpRequest"
@@ -209,8 +233,7 @@ post "/lists/:list_id/todos" do
     session[:error] = error
     erb :list, layout: :layout
   else
-    id = next_todo_id(@list[:todos])
-    @list[:todos] << {id: id, name: text, completed: false}
+    @storage.create_new_todo(@list_id, text)
 
     session[:success] = "The todo was added"
     redirect "/lists/#{@list_id}"
@@ -223,10 +246,9 @@ post "/lists/:list_id/todos/:id/destroy" do
   @list = load_list(@list_id)
 
   todo_id = params[:id].to_i
-  @list[:todos].reject! { |todo| todo[:id] == todo_id }
+  @storage.delete_todo_from_list(@list_id, todo_id)
 
   if env["HTTP_X_REQUESTED_WITH"] == "XMLHttpRequest"
-
     status 204
   else
     session[:success] = "The todo has been deleted."
@@ -241,8 +263,8 @@ post "/lists/:list_id/todos/:id" do
 
   todo_id = params[:id].to_i
   is_completed = params[:completed] == "true"
-  todo = @list[:todos].find { |todo| todo[:id] == todo_id }
-  todo[:completed] = is_completed
+
+  @storage.update_todo_status(@list_id, todo_id, is_completed)
 
   session[:success] = "The todo has been updated."
   redirect "/lists/#{@list_id}"
@@ -253,7 +275,7 @@ post "/lists/:id/complete_all" do
   @list_id = params[:id].to_i
   @list = load_list(@list_id)
   
-  @list[:todos].each { |todo| todo[:completed] = true }
+  @storage.mark_all_todos_as_completed(@list_id)
 
   session[:success] = "All todos have been completed."
   redirect "/lists/#{@list_id}"
